@@ -1,0 +1,79 @@
+plugins {
+    id 'java'
+}
+
+group = 'org.cubrid.hibernate.e2e'
+version = '0.1.0-SNAPSHOT'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+
+ext {
+    hibernateVersion = '8.0.0-SNAPSHOT'
+    testcontainersVersion = '2.0.5'
+    cubridJdbcVersion = '11.3.2.0053'
+    cubridTestcontainersVersion = '0.1.0'
+    junitVersion = '6.0.3'
+    assertjVersion = '3.27.7'
+}
+
+dependencies {
+    testImplementation "org.hibernate.orm:hibernate-core:${hibernateVersion}"
+    testImplementation "org.hibernate.orm:hibernate-community-dialects:${hibernateVersion}"
+
+    testImplementation platform("org.junit:junit-bom:${junitVersion}")
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    testImplementation "org.testcontainers:testcontainers:${testcontainersVersion}"
+    testImplementation "org.testcontainers:testcontainers-junit-jupiter:${testcontainersVersion}"
+    testImplementation "org.cubrid:testcontainers-cubrid:${cubridTestcontainersVersion}"
+    testRuntimeOnly "org.cubrid:cubrid-jdbc:${cubridJdbcVersion}"
+
+    // Hibernate's built-in StatementInspector (SQLStatementInspector) and other test helpers
+    testImplementation "org.hibernate.orm:hibernate-testing:${hibernateVersion}"
+
+    testImplementation "org.assertj:assertj-core:${assertjVersion}"
+
+    testRuntimeOnly 'org.slf4j:slf4j-simple:2.0.16'
+}
+
+test {
+    useJUnitPlatform()
+    systemProperty 'cubrid.image.tag', findProperty('cubridVersion') ?: '10.2'
+    testLogging {
+        events 'passed', 'failed', 'skipped'
+        showStandardStreams = false
+        exceptionFormat = 'full'
+    }
+}
+
+['10.2', '11.0', '11.2', '11.3', '11.4'].each { ver ->
+    def safe = ver.replace('.', '_')
+    tasks.register("testCubrid${safe}", Test) {
+        useJUnitPlatform()
+        systemProperty 'cubrid.image.tag', ver
+        description = "Run integration tests against CUBRID ${ver}"
+        group = 'verification'
+        testClassesDirs = sourceSets.test.output.classesDirs
+        classpath = sourceSets.test.runtimeClasspath
+        testLogging {
+            events 'passed', 'failed', 'skipped'
+            exceptionFormat = 'full'
+        }
+    }
+}
+
+tasks.register('testCubridAll') {
+    description = 'Run integration tests sequentially against all supported CUBRID versions'
+    group = 'verification'
+    dependsOn 'testCubrid10_2', 'testCubrid11_0', 'testCubrid11_2', 'testCubrid11_3', 'testCubrid11_4'
+}
