@@ -10,6 +10,7 @@
         <class>org.cubrid.hibernate.e2e.entity.SalesOrder</class>
         <class>org.cubrid.hibernate.e2e.entity.Game</class>
         <class>org.cubrid.hibernate.e2e.entity.Player</class>
+        <class>org.cubrid.hibernate.e2e.entity.OrgUnit</class>
         <exclude-unlisted-classes>true</exclude-unlisted-classes>
     </persistence-unit>
 </persistence>

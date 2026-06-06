@@ -122,4 +122,11 @@ public abstract class AbstractCubridIT {
 			em.close();
 		}
 	}
+
+	protected <T> T persist(T entity) {
+		return fromTransaction( em -> {
+			em.persist( entity );
+			return entity;
+		} );
+	}
 }

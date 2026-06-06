@@ -1,50 +1,46 @@
 # hibernate-cubrid-e2e
 
-`CUBRIDDialect`의 동작을 실제 CUBRID 인스턴스로 검증하는 통합 테스트 프로젝트.
-[testcontainers-cubrid][tc-cubrid]로 컨테이너를 띄우고 Hibernate ORM의 JPA API를
-통해 dialect를 직접 사용해본다. [hibernate-orm][hibernate-orm]에 PR을 올리기 전
-로컬에서 변경사항을 검증하는 용도.
+External end-to-end tests that exercise `CUBRIDDialect` against a **real CUBRID** server,
+booted with [testcontainers-cubrid][tc-cubrid] and driven through the Hibernate ORM JPA API.
+
+This suite is the verification evidence for the `CUBRIDDialect` modernization
+([HHH-20527][jira]). CUBRID is not part of Hibernate's CI matrix, so the dialect changes are
+validated here against CUBRID 10.2 – 11.4 instead. It consumes Hibernate `8.0.0-SNAPSHOT` from
+mavenLocal, so it always tests the dialect you have locally.
+
+> While building this suite we found and fixed two mis-declared capability flags
+> (`supportsAlterColumnType` was missing its `getAlterColumnTypeString` companion;
+> `supportsJoinsInDelete=true` produced broken SQL because the CUBRID translator does not render
+> joins-in-delete). See [What each test actually verifies](#what-each-test-actually-verifies).
 
 [tc-cubrid]: https://github.com/cubrid/testcontainers-cubrid
 [hibernate-orm]: https://github.com/hibernate/hibernate-orm
+[jira]: https://hibernate.atlassian.net/browse/HHH-20527
 
 ---
 
-## 사전 요구사항
+## Prerequisites
 
-- Java 17 이상
-- 로컬에서 동작 중인 Docker (또는 Docker Desktop)
-- `hibernate-orm` 로컬 체크아웃 (검증하고 싶은 `CUBRIDDialect` 변경이 들어있는 상태)
+- Java 17+
+- A running Docker (or Docker Desktop)
+- A local `hibernate-orm` checkout containing the `CUBRIDDialect` changes you want to verify
 
 ---
 
-## 동작 원리
+## How it works
+
+The two projects are linked by the version string `8.0.0-SNAPSHOT`. The e2e `build.gradle`
+resolves `mavenLocal()` first, so the locally published JARs win.
 
 ```
-┌─────────────────────────────┐                ┌─────────────────────────────┐
-│  hibernate-orm (수정본)     │                │  hibernate-cubrid-e2e       │
-└──────────────┬──────────────┘                └──────────────┬──────────────┘
-               │                                              │
-               │ ./gradlew publishToMavenLocal                │ ./gradlew test
-               ▼                                              ▼
-         ~/.m2/repository  ── 8.0.0-SNAPSHOT 아티팩트 ──→  mavenLocal()로 가져옴
-                                                              │
-                                                              ▼
-                                                  testcontainers가
-                                                  cubrid/cubrid:<버전> 컨테이너 실행
-                                                              │
-                                                              ▼
-                                                  12개 테스트가 dialect 동작 검증
+hibernate-orm  ──(publishToMavenLocal)──▶  ~/.m2  ──(8.0.0-SNAPSHOT)──▶  hibernate-cubrid-e2e
+                                                                              │
+                                                          testcontainers boots cubrid/cubrid:<ver>
+                                                                              │
+                                                          42 tests drive the dialect via JPA/HQL
 ```
 
-두 프로젝트는 **버전 문자열** `8.0.0-SNAPSHOT`으로 연결된다.
-e2e의 `build.gradle`이 `mavenLocal()`을 먼저 검색하므로 로컬 publish한 JAR이 우선 사용된다.
-
----
-
-## 빠른 시작
-
-### 최초 1회 — Hibernate의 필요한 4개 모듈 publish
+### One-time — publish the four Hibernate modules
 
 ```sh
 cd /path/to/hibernate-orm
@@ -55,95 +51,124 @@ cd /path/to/hibernate-orm
           -x test -x javadoc
 ```
 
-### 이후 작업 — 수정한 모듈만 다시 publish
-
-`CUBRIDDialect.java`를 수정했다면:
+### After editing `CUBRIDDialect.java` — re-publish just that module, then re-run
 
 ```sh
 cd /path/to/hibernate-orm
-./gradlew :hibernate-community-dialects:publishToMavenLocal -x test
-```
+./gradlew :hibernate-community-dialects:publishToMavenLocal -x test -x javadoc
 
-다른 모듈을 수정했다면 해당 모듈을 publish.
-
-### 테스트 실행
-
-```sh
 cd /path/to/hibernate-cubrid-e2e
-./gradlew test --rerun-tasks
+./gradlew testCubrid10_2 --refresh-dependencies --rerun-tasks
 ```
 
-`--rerun-tasks`는 Gradle 캐시를 무시하고 새로 publish된 JAR을 다시 로드한다.
+`--refresh-dependencies --rerun-tasks` forces Gradle to re-resolve the SNAPSHOT and re-run the tests.
 
 ---
 
-## CUBRID 버전 선택
+## Choosing the CUBRID version
 
-기본값은 `10.2` (modernize된 dialect의 최소 지원 버전).
-`cubridVersion` Gradle 프로퍼티 또는 명명된 태스크로 변경 가능.
+Default is `10.2` (the modernized dialect's minimum supported version).
 
-| 목적                          | 명령                                                      |
-| ----------------------------- | --------------------------------------------------------- |
-| CUBRID 10.2 (기본)            | `./gradlew test`                                          |
-| CUBRID 11.4                   | `./gradlew test -PcubridVersion=11.4`                     |
-| 특정 버전 (명명 태스크)        | `./gradlew testCubrid11_4`                                |
-| 지원 버전 모두 순차 실행      | `./gradlew testCubridAll`                                 |
-| 특정 테스트만                 | `./gradlew test --tests "*pessimisticWrite*"`             |
+| Goal                         | Command                                       |
+| ---------------------------- | --------------------------------------------- |
+| CUBRID 10.2 (default)        | `./gradlew testCubrid10_2`                    |
+| A specific version           | `./gradlew testCubrid11_4`                    |
+| All supported versions       | `./gradlew testCubridAll`                     |
+| A single test                | `./gradlew testCubrid10_2 --tests "*pessimisticWrite*"` |
 
-사용 가능한 명명 태스크: `testCubrid10_2`, `testCubrid11_0`, `testCubrid11_2`,
-`testCubrid11_3`, `testCubrid11_4`.
+Named tasks: `testCubrid10_2`, `testCubrid11_0`, `testCubrid11_2`, `testCubrid11_3`, `testCubrid11_4`.
 
 ---
 
-## 검증 항목
+## What each test actually verifies
 
-테스트 클래스 하나(`CubridDialectIT`)에 `@Nested`로 그룹화된 12개의 테스트 메서드:
+42 tests across four classes. Crucially, **not every test is a flag verifier** — a test only
+*verifies* a dialect change if it would **fail when that change is reverted**. We checked this by
+reverting each changed flag and re-running (a mutation test). The tests fall into three honest tiers:
 
-| 그룹                  | 개수 | 검증 내용                                                                |
-| --------------------- | ---- | ----------------------------------------------------------------------- |
-| **Pessimistic locking** | 3 | `PESSIMISTIC_WRITE`/`PESSIMISTIC_READ`에 `FOR UPDATE` 절 포함, outer join과의 조합 |
-| **Query feature support** | 6 | window 함수(`OVER`), CTE(`WITH`), 서브쿼리 기반 bulk DELETE, `LIMIT n,m` 페이지네이션, grouped `UNION` + outer `ORDER BY`, `NULLS FIRST` 기본 동작 |
-| **ID generation**       | 3 | `AUTO_INCREMENT` 왕복, sequence ID 증가, INSERT 시 native `.next_value` 구문 |
+### Tier 1 — primary, mutation-guarded verification (`CubridCapabilityIT`, 26 tests)
 
-각 테스트는 실행 결과(query 반환값)와 생성된 SQL 형태(Hibernate의 [`SQLStatementInspector`][inspector] 사용)를
-둘 다 검증한다. 따라서 *"`FOR UPDATE`가 실제로 SQL에 들어간다"* 같은 PR 주장이
-실제로 CUBRID에 보내지는 SQL 수준에서 입증된다.
+A `@ParameterizedTest` reflects the dialect's declared value for each SQL-feature flag, fires a
+minimal probe SQL straight at CUBRID, and asserts **declared value == CUBRID acceptance**. By
+construction this fails the moment a flag is mis-declared, so it is the suite's strongest evidence.
+It genuinely verifies these PR-changed flags:
+`supportsWindowFunctions`, `supportsRecursiveCTE`, `supportsNestedWithClause`, `supportsIsTrue`,
+`supportsValuesList`, `supportsNonQueryWithCTE`, and all five row-value-constructor flags.
+
+Plus three dedicated checks in the same class:
+- `alterColumnTypeClauseAcceptedByCubrid` — builds the `ALTER TABLE … MODIFY COLUMN` clause the
+  dialect emits and fires it at CUBRID (regression guard for the `getAlterColumnTypeString` fix).
+- `maxIdentifierLengthAcceptedByCubrid` — a 254-byte identifier (Hibernate's truncation target) is
+  accepted by CUBRID.
+- `defaultConstructorUsesMinimumVersion` — the no-arg constructor defaults to CUBRID 10.2.
+
+### Tier 2 — behaviour verified through Hibernate, fails on revert (`CubridQueryFeatureIT`, `CubridLockingIT`)
+
+- `explicitNullsLastOnAscending`, `explicitNullsFirstOnDescending` — verify `getNullOrdering=SMALLEST`
+  (assert both row order and that the emitted SQL contains `nulls last`/`nulls first`; revert to the
+  base `GREATEST` and they fail).
+- `recursiveCteWalksTree` — verifies `supportsRecursiveCTE` (reverting throws at translation).
+- `pessimisticWriteAddsForUpdate`, `pessimisticReadAlsoAddsForUpdate` — verify the locking fix
+  (`FOR UPDATE` is emitted; the pre-PR empty `getForUpdateString()` produced none).
+- `leftJoinWithPessimisticWriteSucceeds` — outer join + `FOR UPDATE` (`OuterJoinLockingType.FULL`).
+
+### Tier 3 — native-execution / regression checks (NOT flag verifiers)
+
+These confirm a feature runs correctly on CUBRID but would still pass if the named flag were
+reverted (the flag is either a no-op override, or the SELECT path does not consult it). They are
+useful smoke/regression coverage, not proof of a flag:
+- `windowFunctionRowNumberOverPartitionBy`, `topLevelWithClauseFiltersResults`,
+  `unionOfGroupedQueriesWithOuterOrderBy`, `bulkDeleteWithSubqueryFilter`,
+  `limitOffsetUsesCubridLimitClause`, and the two plain (`asc`/`desc`) null-ordering tests, which
+  verify CUBRID's *native* null ordering rather than the dialect flag.
+- `CubridIdGenerationIT` (3) — IDENTITY and SEQUENCE/`.next_value`; pre-existing behaviour, unchanged
+  by this PR, kept as regression coverage.
+
+All tests assert results and, where it matters, the emitted SQL via Hibernate's
+[`SQLStatementInspector`][inspector].
+
+### Not covered here (documented gaps / limitations)
+
+- `supportsFromClauseInUpdate=false`, `canCreateSchema=false`, `supportsTableCheck=false`,
+  `supportsCommentOn=false` — DDL/edge-of-harness concerns, asserted by reasoning + the CUBRID 10.2
+  manual rather than a runtime probe.
+- Implicit-association bulk delete (`delete … where p.assoc.attr = …`) is **unsupported on CUBRID via
+  Hibernate**: the join-emulation correlates the outer FK into a subquery JOIN condition, which CUBRID
+  rejects (`'…' in join condition is not defined`). Use the FK-direct subquery form instead.
 
 [inspector]: https://github.com/hibernate/hibernate-orm/blob/main/hibernate-testing/src/main/java/org/hibernate/testing/jdbc/SQLStatementInspector.java
 
 ---
 
-## 프로젝트 구조
+## Project layout
 
 ```
-hibernate-cubrid-e2e/
-├── build.gradle
-├── settings.gradle
-├── gradle.properties
-└── src/test/
-    ├── resources/META-INF/
-    │   └── persistence.xml
-    └── java/org/cubrid/hibernate/e2e/
-        ├── entity/
-        │   ├── Member.java         (IDENTITY id)
-        │   ├── SalesOrder.java     (sequence id)
-        │   ├── Game.java           (1:N의 부모)
-        │   └── Player.java         (자식)
-        ├── support/
-        │   └── AbstractCubridIT.java
-        └── CubridDialectIT.java
+src/test/
+├── resources/META-INF/persistence.xml
+└── java/org/cubrid/hibernate/e2e/
+    ├── entity/
+    │   ├── Member.java       (IDENTITY id)
+    │   ├── SalesOrder.java   (sequence id; "SalesOrder" because ORDER is reserved)
+    │   ├── Game.java         (parent of 1:N)
+    │   ├── Player.java       (child)
+    │   └── OrgUnit.java      (self-referential tree, for the recursive CTE)
+    ├── support/
+    │   └── AbstractCubridIT.java   (container + EntityManagerFactory + SQLStatementInspector)
+    ├── CubridCapabilityIT.java     (Tier 1)
+    ├── CubridQueryFeatureIT.java   (Tiers 2/3)
+    ├── CubridLockingIT.java        (Tier 2)
+    └── CubridIdGenerationIT.java   (Tier 3)
 ```
 
 ---
 
-## 문제 해결
+## Troubleshooting
 
-- **`8.0.0-SNAPSHOT`을 못 찾는다**: publish 단계를 다시 실행. `hibernate-platform`은
-  직접 참조하지 않지만 BOM으로 transitively 소비되므로 필수.
-- **테스트는 통과하지만 옛 코드가 사용되는 것 같다**: `--rerun-tasks`를 붙여
-  Gradle이 SNAPSHOT JAR을 강제로 다시 로드하게 한다.
-- **반복 실행 후 Docker가 응답 없음 (Apple Silicon)**: CUBRID 이미지가 amd64라서
-  Rosetta 에뮬레이션으로 동작한다. Docker Desktop을 재시작하거나 할당 메모리를
-  늘리면 해결된다.
-- **Hibernate 버전이 바뀐 경우** (예: `8.1.0-SNAPSHOT`): 이 프로젝트의
-  `build.gradle`의 `hibernateVersion`을 동일 문자열로 수정한 뒤 publish 재실행.
+- **`8.0.0-SNAPSHOT` not found** — re-run the publish step. `hibernate-platform` is consumed
+  transitively as a BOM, so it must be published too.
+- **Tests pass but seem to use old code** — add `--refresh-dependencies --rerun-tasks` so Gradle
+  reloads the SNAPSHOT JAR.
+- **Docker unresponsive after repeated runs (Apple Silicon)** — the CUBRID image is amd64 and runs
+  under Rosetta; restart Docker Desktop or raise its memory.
+- **Hibernate version changed** (e.g. `8.1.0-SNAPSHOT`) — update `hibernateVersion` in `build.gradle`
+  and re-publish.

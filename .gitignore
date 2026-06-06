@@ -21,3 +21,6 @@ bin/
 
 # Logs
 *.log
+
+# Tool version managers (jenv / asdf)
+.java-version
